@@ -1,0 +1,1307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>detangler game by Rick Osborne</title>
+  <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"/>
+  <!--
+  Hello there, View-Sourcerers!
+  This was coded over a few hours on Nov 22, 2024.
+  It's probably quite buggy, but It Works For Me.
+  The inspiration was from Planarity by Jason Davies: https://www.jasondavies.com/planarity/
+  However, I didn't look at the code there, just the concept.
+  All the code here is my own, modulo a few bits of copypasta from SO and MDN.
+  The license for this code is Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International: https://creativecommons.org/licenses/by-nc-sa/4.0/
+  -->
+  <style>
+    * {
+      border: none;
+      font-size: 100%;
+      list-style: none;
+      margin: 0;
+      overscroll-behavior: none;
+      padding: 0;
+      text-decoration: none;
+      text-indent: 0;
+    }
+
+    html, body, #canvas {
+      background-color: black;
+      height: 100%;
+      left: 0;
+      position: absolute;
+      top: 0;
+      width: 100%;
+    }
+  </style>
+  <script>
+    /**
+     * @typedef Orientation
+     * @type {0|1|2}
+     */
+
+    /**
+     * Helper class to calculate line segment intersections.
+     * The algorithm here is based heavily on:
+     * https://www.geeksforgeeks.org/check-if-two-given-line-segments-intersect/
+     */
+    class Intersect {
+      static CLOCKWISE = 1;
+      static COLLINEAR = 0;
+      static COUNTERCLOCKWISE = 2;
+
+      /**
+       * When two points (p and r) are collinear, is a third (q) between them?
+       * @param {Point} p
+       * @param {Point} q
+       * @param {Point} r
+       * @returns {boolean}
+       */
+      static onSegment(p, q, r) {
+        return (q.x <= Math.max(p.x, r.x)) &&
+          (q.x >= Math.min(p.x, r.x)) &&
+          (q.y <= Math.max(p.y, r.y)) &&
+          (q.y >= Math.min(p.y, r.y));
+      }
+
+      /**
+       * For the three given points, if they are made into an angle,
+       * do they point clockwise or counter-clockwise?
+       * @param {Point} p
+       * @param {Point} q
+       * @param {Point} r
+       * @returns {Orientation}
+       */
+      static orientation(p, q, r) {
+        const val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+        if (val === 0) {
+          return Intersect.COLLINEAR;
+        }
+        if (val > 0) {
+          return Intersect.CLOCKWISE;
+        }
+        return Intersect.COUNTERCLOCKWISE;
+      }
+
+      /**
+       * Given four points, each pair of which (a+b and c+d) is a line segment,
+       * do those segments intersect?
+       * @param {Point} a
+       * @param {Point} b
+       * @param {Point} c
+       * @param {Point} d
+       * @returns {boolean}
+       */
+      static points(a, b, c, d) {
+        if (a.equals(c) || a.equals(d) || b.equals(c) || b.equals(d)) {
+          return true;
+        }
+        const o1 = Intersect.orientation(a, b, c);
+        const o2 = Intersect.orientation(a, b, d);
+        const o3 = Intersect.orientation(c, d, a);
+        const o4 = Intersect.orientation(c, d, b);
+        if (o1 !== o2 && o3 !== o4) {
+          return true;
+        }
+        if (o1 === Intersect.COLLINEAR && Intersect.onSegment(a, c, b)) {
+          return true;
+        }
+        if (o2 === Intersect.COLLINEAR && Intersect.onSegment(a, d, b)) {
+          return true;
+        }
+        if (o3 === Intersect.COLLINEAR && Intersect.onSegment(c, a, d)) {
+          return true;
+        }
+        // noinspection RedundantIfStatementJS
+        if (o4 === Intersect.COLLINEAR && Intersect.onSegment(c, b, d)) {
+          return true;
+        }
+        return false;
+      }
+    }
+
+    /**
+     * Plain-old JS object for a rectangle.  Used for bounding boxes.
+     */
+    class Rectangle {
+      /** @type {number} */
+      height;
+      /** @type {number} */
+      width;
+      /** @type {number} */
+      x;
+      /** @type {number} */
+      y;
+
+      constructor(x, y, width, height) {
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+      }
+    }
+
+    /**
+     * An (x,y) pair of coordinates, where the values have been rounded to the
+     * nearest integer, to make comparisons easier.
+     */
+    class Point {
+      /** @type {number} */
+      x;
+      /** @type {number} */
+      y;
+
+      /**
+       * Don't use this directly — use {@link atXY} instead.
+       * @param {number} x
+       * @param {number} y
+       */
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+      }
+
+      /**
+       * @param {number} x
+       * @param {number} y
+       * @returns {Point}
+       */
+      static atXY(x, y) {
+        const roundX = Math.round(x);
+        const roundY = Math.round(y);
+        return new Point(roundX, roundY);
+      }
+
+      /**
+       * Given another Point, are they the same?
+       * @param {Point} other
+       * @returns {boolean}
+       */
+      equals(other) {
+        return other === this || ((other instanceof Point && other.x === this.x && other.y === this.y));
+      }
+    }
+
+    /**
+     * A line segment connecting two points.  Note that the {@code high}
+     * and {@code low} here are indexes into an array of points — point IDs
+     * instead of objects.  Because we know we're not going to have a more
+     * than a few dozen of these, we keep a static set of them, and reuse
+     * them on future calls.
+     */
+    class Edge {
+      /** @type {Record<string,Edge>} */
+      static #instances = {};
+      /** @type {number} */
+      high;
+      /** @type {number} */
+      low;
+
+      /**
+       * Don't call this directly.  Use {@link between} instead.
+       * @param {number} low
+       * @param {number} high
+       */
+      constructor(low, high) {
+        this.low = low;
+        this.high = high;
+      }
+
+      /**
+       * @param {number} a
+       * @param {number} b
+       * @returns {Edge}
+       */
+      static between(a, b) {
+        const low = Math.min(a, b);
+        const high = Math.max(a, b);
+        const str = [low, high].join("-");
+        let instance = Edge.#instances[str];
+        if (instance == null) {
+          instance = new Edge(low, high);
+          Edge.#instances[str] = instance;
+        }
+        return instance;
+      }
+    }
+
+    /**
+     * Helper for generating lists in the form {@code [0...n]}.
+     */
+    class IntList {
+      /**
+       * @param {number} size
+       * @returns {number[]}
+       */
+      static ofSize(size) {
+        /** @type {number[]} */
+        const list = new Array(size);
+        for (let i = 0; i < size; i++) {
+          list[i] = i;
+        }
+        return list;
+      }
+    }
+
+    /**
+     * Model for a planar graph, with a set of points (nodes)
+     * and edges between them.  Helps calculate intersections
+     * between its edges.
+     */
+    class Tangle {
+      /** @type {IntersectionTracker} */
+      #intersectionTracker;
+      /** @type {Edge[]} */
+      edges;
+      /** @type {Point[]} */
+      points;
+
+      /**
+       * Don't call this directly — use {@link SplitFaceStrategy} instead.
+       * @param {Point[]} points
+       * @param {Edge[]} edges
+       */
+      constructor(points, edges) {
+        this.points = points;
+        this.edges = edges;
+
+        /**
+         * The real work horse behind all the intersection management.
+         * Tries really hard to keep intersection-checking to something
+         * close to O(n) instead of O(n^2).
+         */
+        class IntersectionTracker {
+          /** @type {number} */
+          #edgeCount;
+          /** @type {number} */
+          #intersecting = 0;
+          /** @type {boolean[][]} */
+          #intersects;
+
+          /**
+           * @param edgeCount
+           */
+          constructor(edgeCount) {
+            this.#edgeCount = edgeCount;
+            this.#intersects = IntList.ofSize(edgeCount)
+              .map(() => IntList.ofSize(edgeCount).map(() => false));
+            for (let i = 0; i < edgeCount; i++) {
+              for (let j = i + 1; j < edgeCount; j++) {
+                this.setFor(i, j);
+              }
+            }
+          }
+
+          /**
+           * @param {number} edgeIndex
+           * @returns {number}
+           */
+          intersectionsForEdge(edgeIndex) {
+            let count = 0;
+            for (let i = 0; i < edgeIndex; i++) {
+              if (this.#intersects[i][edgeIndex]) {
+                count++;
+              }
+            }
+            for (let i = edgeIndex + 1; i < this.#edgeCount; i++) {
+              if (this.#intersects[edgeIndex][i]) {
+                count++;
+              }
+            }
+            return count;
+          }
+
+          /**
+           * @returns {boolean}
+           */
+          isDetangled() {
+            return this.#intersecting === 0;
+          }
+
+          /**
+           * @param {number} pointIndex
+           * @returns {void}
+           */
+          recalculatePoint(pointIndex) {
+            for (let edgeIndex = 0; edgeIndex < this.#edgeCount; edgeIndex++) {
+              const edge = edges[edgeIndex];
+              if (edge.low === pointIndex || edge.high === pointIndex) {
+                for (let j = 0; j < edgeIndex; j++) {
+                  this.setFor(j, edgeIndex);
+                }
+                for (let j = edgeIndex + 1; j < this.#edgeCount; j++) {
+                  this.setFor(edgeIndex, j);
+                }
+              }
+            }
+          }
+
+          /**
+           * @param {number} low
+           * @param {number} high
+           * @param {boolean} after
+           * @returns {void}
+           */
+          setAt(low, high, after) {
+            const before = this.#intersects[low][high];
+            if (before === after) {
+              return;
+            }
+            this.#intersecting += after ? 1 : -1;
+            this.#intersects[low][high] = after;
+          }
+
+          /**
+           * @param {number} low
+           * @param {number} high
+           * @returns {void}
+           */
+          setFor(low, high) {
+            const a = edges[low];
+            const b = edges[high];
+            if (a == null || b == null) {
+              debugger;
+            }
+            if (a.low === b.low || a.low === b.high || a.high === b.low || a.high === b.high) {
+              return;
+            }
+            const doesIntersect = Intersect.points(points[a.low], points[a.high], points[b.low], points[b.high]);
+            this.setAt(low, high, doesIntersect);
+          }
+        }
+
+        this.#intersectionTracker = new IntersectionTracker(edges.length);
+      }
+
+      /**
+       * Calculate max and min X and Y coordinates, so the points can be resized.
+       * @returns {Rectangle}
+       */
+      bounds() {
+        const first = this.points[0];
+        let minX = first.x;
+        let maxX = first.x;
+        let minY = first.y;
+        let maxY = first.y;
+        for (const point of this.points) {
+          const x = point.x;
+          const y = point.y;
+          if (x < minX) minX = x;
+          else if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          else if (y > maxY) maxY = y;
+        }
+        return new Rectangle(minX, minY, maxX - minX, maxY - minY);
+      }
+
+      /**
+       * @param {number} edgeIndex
+       * @returns {number}
+       */
+      intersectionsForEdge(edgeIndex) {
+        return this.#intersectionTracker.intersectionsForEdge(edgeIndex);
+      }
+
+      /**
+       * @returns {boolean}
+       */
+      isDetangled() {
+        return this.#intersectionTracker.isDetangled();
+      }
+
+      /**
+       * @param {number} pointIndex
+       * @param {Point} before
+       * @param {Point} after
+       */
+      onPointMoved(pointIndex, before, after) {
+        if (before.equals(after)) {
+          return;
+        }
+        this.points[pointIndex] = after;
+        this.#intersectionTracker.recalculatePoint(pointIndex);
+      }
+
+      /**
+       * Given a new box to fit within, scale the current graph to fit it.
+       * @param {Rectangle} box
+       * @returns {Tangle}
+       */
+      scale(box) {
+        const original = this.bounds();
+        const originalWidth = Math.max(1, original.width);
+        const originalHeight = Math.max(1, original.height);
+        const originalX = Math.round(original.x);
+        const originalY = Math.round(original.y);
+        const ratioX = box.width / originalWidth;
+        const ratioY = box.height / originalHeight;
+        const newX = box.x;
+        const newY = box.y;
+        const newPoints = this.points.map((point) => Point.atXY(
+          ((point.x - originalX) * ratioX) + newX,
+          ((point.y - originalY) * ratioY) + newY,
+        ));
+        return new Tangle(newPoints, this.edges);
+      }
+    }
+
+    /**
+     * Helper to make {@link Math.random} calls easier to read.
+     * It uses a super simple Linear Congruential Generator:
+     * https://en.wikipedia.org/wiki/Linear_congruential_generator
+     */
+    class Rand {
+      /** @type {Rand} */
+      static instance = new Rand();
+      // Delphi/Turbo Pascal's seeds.  Because 🥰 that's basically where
+      // it all started for me.
+      #a = 134775813;
+      #c = 1;
+      #m = 2 ** 31;
+      /** @type {number} */
+      #state;
+
+      constructor(seed = Date.now()) {
+        this.#state = seed;
+      }
+
+      /**
+       * Return a random integer in the range {@code (-n...n)}.
+       * @param {number} radius
+       * @returns {number}
+       */
+      static around(radius) {
+        const sign = Rand.instance.int() % 2 === 0 ? -1 : 1;
+        return Rand.instance.range(0, radius) * sign;
+      }
+
+      /**
+       * Return an integer in the range {@code [0...n)}.
+       * Uses {@link Math.trunc} instead of {@link Math.floor} so
+       * it will always round toward 0.  Generally used to get
+       * a random item in an array.
+       * @param {number} length
+       * @returns {number}
+       */
+      static index(length) {
+        return Rand.instance.range(0, length);
+      }
+
+      /** @returns {number} */
+      int() {
+        this.#state = (this.#a * this.#state + this.#c) % this.#m;
+        return this.#state;
+      }
+
+      /**
+       * @param {number} low
+       * @param {number} high
+       * @returns {number} In the range [low...high)
+       */
+      range(low, high) {
+        const width = high - low;
+        const float = this.int() / this.#m;
+        return low + Math.trunc(float * width);
+      }
+    }
+
+    /**
+     * Fancy wrapper around an array of point indices.  That is,
+     * {@code [0, 1, 3, 5]} is a polygon which goes through points
+     * 0, 1, 3, 5, and then back around to 0.
+     * If there are enough points, can be split into two smaller faces.
+     */
+    class Face {
+      /** @type {number[]} */
+      indices;
+
+      /**
+       * @param {number[]} indices
+       */
+      constructor(indices) {
+        this.indices = indices;
+      }
+
+      /**
+       * @param {number} size
+       * @returns {Face}
+       */
+      static ofSize(size) {
+        return new Face(IntList.ofSize(size));
+      }
+
+      /**
+       * @returns {boolean}
+       */
+      canSplit() {
+        return this.indices.length > 3;
+      }
+
+      /**
+       * Split this Face into two smaller Faces by slicing between two
+       * random non-adjacent points.
+       * @returns {[Face,Face]}
+       */
+      randomSplit() {
+        const count = this.indices.length;
+        const leftIndex = Rand.index(count);
+        // We need the points to not be adjacent, so that eliminates
+        // (1) the point itself, and its (2) neighbors.
+        const rightOffset = Rand.index(count - 3);
+        const rightIndex = (leftIndex + 2 + rightOffset) % count;
+        const low = Math.min(leftIndex, rightIndex);
+        const high = Math.max(leftIndex, rightIndex);
+        return this.split(low, high);
+      }
+
+      /**
+       * Split the current Face into two smaller ones by slicing between
+       * the given points.  The math here assumes {@link low} and {@link high}
+       * are in ascending numerical order.
+       * Visually:
+       * @example
+       * Imagine the polygon described by these points:
+       *     0---1
+       *     |    \
+       *     |     3
+       *     |    /
+       *     5---4
+       * In array form, this would look like:
+       *     [ 0, 1, 3, 4, 5 ]
+       * If we wanted to slice along between the points (1, 4), this would
+       * divide this array into two logical parts:
+       *     [ 0, 1, 3, 4, 5 ]
+       *     -----|=====|-----
+       * That is, numbers with `-` beneath them become one new face, while `=`
+       * numbers become the other:
+       *     [ 1, 3, 4 ] and [ 0, 1, 4, 5 ]
+       * In the code below, the `=` numbers are the "inside", while the `-`
+       * numbers are the "outside".
+       * @param {number} low
+       * @param {number} high
+       * @returns {[Face,Face]}
+       */
+      split(low, high) {
+        // The "inner" slice is easy, as it just throws out the points outside the range.
+        const inner = this.indices.slice(low, high + 1);
+        // The "outside" is the two remainder halves conjoined.
+        const outer = [
+          ...this.indices.slice(0, low + 1),
+          ...this.indices.slice(high),
+        ];
+        return [
+          new Face(inner),
+          new Face(outer),
+        ];
+      }
+    }
+
+    /**
+     * @see https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle
+     */
+    class FisherYatesShuffle {
+      /**
+       * Shuffles an array in-place.
+       * @template {any} T
+       * @param {T[]} list
+       * @returns {void}
+       */
+      static inPlace(list) {
+        for (let i = list.length - 1; i > 0; i--) {
+          const targetIndex = Rand.index(i);
+          const targetPoint = list[targetIndex];
+          list[targetIndex] = list[i];
+          list[i] = targetPoint;
+        }
+      }
+    }
+
+    /**
+     * When starting a new Tangle, it can be confusing to use completely
+     * random starting positions, as those have a decent chance of overlap.
+     * Instead, we divide up the screen into roughly square-ish parts, at least
+     * as many as we need, find their centers, fuzz those a bit, shuffle them,
+     * and return them.  This produces a starting Tangle which is still chaotic,
+     * but easier for players to quickly intuit.
+     */
+    class Grid {
+      /**
+       * @param {number} pointCount
+       * @param {number} width
+       * @param {number} height
+       */
+      static randomForPoints(pointCount, width, height) {
+        const aspect = width / height;
+        // aspect = cols / rows       -> cols = rows * aspect
+        // pointCount = cols * rows   -> cols = pointCount / rows
+        // -> rows * aspect = pointCount / rows
+        // -> rows * rows = pointCount / aspect
+        let minRows = Math.ceil(Math.sqrt(pointCount / aspect));
+        const rows = minRows + 1;
+        const cols = Math.ceil(pointCount / minRows) + 1;
+        const rowHeight = Math.round(height / rows);
+        const colWidth = Math.round(width / cols);
+        const halfHeight = Math.round(rowHeight / 2);
+        const halfWidth = Math.round(colWidth / 2);
+        /** @type {Point[]} */
+        const more = new Array(rows * cols);
+        let nextPointIndex = 0;
+        for (let row = 0; row < rows; row++) {
+          for (let col = 0; col < cols; col++) {
+            more[nextPointIndex] = Point.atXY(
+              col * colWidth + halfWidth + Rand.around(halfWidth * 0.8),
+              row * rowHeight + halfHeight + Rand.around(halfHeight * 0.8),
+            );
+            nextPointIndex++;
+          }
+        }
+        FisherYatesShuffle.inPlace(more);
+        return more.slice(0, pointCount);
+      }
+    }
+
+    /**
+     * Cheap and easy way of generating a graph which is guaranteed to
+     * be planar, and thus capable of being detangled.
+     * 1. Start with a simple (convex) polygon of the given number of sides.
+     * 2. Pick any two non-adjacent points on that polygon.
+     * 3. Split the polygon along a new seam along those two points.
+     * 4. For each of the two new polygons:
+     *    a. If there are at least 3 points, put it into a list of polygons
+     *       we can split in the future.
+     *    b. Otherwise, put it into a list of triangles.
+     * 5. From the list of splittable polygons, pick a random one and loop
+     *    back up to Step 2.
+     * 6. With the list of resulting triangles, generate a Set of their
+     *    points and edges.
+     * 7. Generate random starting positions for each point.
+     */
+    class SplitFaceStrategy {
+      /**
+       * @param {number} pointCount
+       * @param {number} width
+       * @param {number} height
+       * @returns {Tangle}
+       */
+      static buildTangle(pointCount, width, height) {
+        /** @type {Point[]} */
+        const starts = Grid.randomForPoints(pointCount, width, height);
+        const points = starts.slice(0, pointCount);
+        const all = Face.ofSize(pointCount);
+        /** @type {Face[]} */
+        const splittable = [all];
+        /** @type {Face[]} */
+        const keep = [];
+        const edgeCount = (pointCount * 2) - 2;
+        for (let i = 0; i < edgeCount && splittable.length > 0; i++) {
+          const index = Rand.index(splittable.length);
+          const one = splittable.splice(index, 1)[0];
+          const two = one.randomSplit();
+          for (const face of two) {
+            if (face.canSplit()) splittable.push(face);
+            else keep.push(face);
+          }
+        }
+        // There shouldn't be anything here, but just in case ...
+        keep.push(...splittable);
+        /** @type {Set<Edge>} */
+        const edgeSet = new Set();
+        for (const face of keep) {
+          const count = face.indices.length;
+          let previous = face.indices.at(-1);
+          for (let i = 0; i < count; i++) {
+            const next = face.indices[i];
+            const edge = Edge.between(previous, next);
+            edgeSet.add(edge);
+            previous = next;
+          }
+        }
+        const edges = Array.from(edgeSet)
+          .sort((a, b) => a.low !== b.low ? (a.low - b.low) : (a.high - b.high));
+        return new Tangle(points, edges);
+      }
+    }
+
+    /**
+     * Abstract model for a game of some size containing a tangled graph.
+     * It's a little anemic because the game is simple.  With a more robust
+     * game, this might have additional interaction logic, consistency checking,
+     * etc.
+     */
+    class DetanglerGame {
+      /** @type {number} */
+      #height;
+      /** @type {Tangle} */
+      #tangle;
+      /** @type {number} */
+      #width;
+
+      /**
+       * @param {number} pointCount
+       * @param {number} width
+       * @param {number} height
+       */
+      constructor(pointCount, width, height) {
+        this.#height = height;
+        this.#width = width;
+        this.#tangle = SplitFaceStrategy.buildTangle(pointCount, width, height);
+      }
+
+      /**
+       * @returns {Edge[]}
+       */
+      get edges() {
+        return this.#tangle.edges;
+      }
+
+      /**
+       * @returns {Point[]}
+       */
+      get points() {
+        return this.#tangle.points;
+      }
+
+      /**
+       * @param {number} edgeIndex
+       * @returns {number}
+       */
+      intersectionCountForEdge(edgeIndex) {
+        return this.#tangle.intersectionsForEdge(edgeIndex);
+      }
+
+      /**
+       * @returns {boolean}
+       */
+      isDetangled() {
+        return this.#tangle.isDetangled();
+      }
+
+      /**
+       * Tells the Tangle that a point moved, and it must invalidate and
+       * recalculate the intersections for the related segments.
+       * @param {number} pointIndex
+       * @param {Point} before
+       * @param {Point} after
+       * @returns {void}
+       */
+      onPointMove(pointIndex, before, after) {
+        this.#tangle.onPointMoved(pointIndex, before, after);
+      }
+
+      /**
+       * Tells the tangle the game board size changed, and thus
+       * the tangle should resize itself to fit.  This changes the
+       * point coordinates, but not their intersections.
+       * @param {number} width
+       * @param {number} height
+       * @returns {void}
+       */
+      onResize(width, height) {
+        this.#width = width;
+        this.#height = height;
+        this.#tangle = this.#tangle.scale(new Rectangle(0, 0, width, height));
+      }
+    }
+
+    /**
+     * @typedef ThemeColor
+     * @type {string | CanvasGradient | CanvasPattern}
+     */
+
+    /**
+     * A set of colors in which the game should be drawn.
+     */
+    class Theme {
+      static DefaultGray = "#777777";
+      static DefaultSilver = "#eeeeee";
+      static Ace = new Theme("#5e1984", "#9e9e9e", "#3da542", Theme.DefaultSilver, "#ffffff");
+      static Eight = new Theme("#fcf431", Theme.DefaultGray, Theme.DefaultSilver, "#9d59d2", "#ffffff");
+      static Jack = new Theme("#bcc4c7", Theme.DefaultGray, Theme.DefaultSilver, "#a5fa5e", "#ffffff");
+      static Joker = new Theme("#21b0fe", Theme.DefaultGray, "#fed700", "#fe218b", Theme.DefaultGray);
+      static King = new Theme("#fe941e", Theme.DefaultGray, "#ffff00", "#ff1e26", Theme.DefaultGray);
+      static Nine = new Theme("#b57edc", Theme.DefaultGray, Theme.DefaultSilver, "#4a8122", "#ffffff");
+      static Queen = new Theme("#a20161", "#fd9855", "#d42c00", "#ffffff", "#d161a2");
+      static Seven = new Theme("#d70071", Theme.DefaultGray, "#0035aa", "#9c4e97", Theme.DefaultGray);
+      static Ten = new Theme("#f6aab7", Theme.DefaultGray, Theme.DefaultSilver, "#55cdfd", "#ffffff");
+      static All = [Theme.Ace, Theme.King, Theme.Queen, Theme.Jack, Theme.Ten, Theme.Nine, Theme.Eight, Theme.Seven, Theme.Joker];
+      /** type {ThemeColor} */
+      edgeDefault;
+      /** type {ThemeColor} */
+      edgeIntersected;
+      /** type {ThemeColor} */
+      edgeTouched;
+      /** type {ThemeColor} */
+      pointDefault;
+      /** type {ThemeColor} */
+      pointTouched;
+
+      constructor(edgeDefault, edgeIntersected, edgeTouched, pointDefault, pointTouched) {
+        this.edgeDefault = edgeDefault;
+        this.edgeIntersected = edgeIntersected;
+        this.edgeTouched = edgeTouched;
+        this.pointDefault = pointDefault;
+        this.pointTouched = pointTouched;
+      }
+
+      /**
+       * @returns {Theme}
+       */
+      static random() {
+        const index = Rand.index(Theme.All.length);
+        return Theme.All[index];
+      }
+    }
+
+    class Color {
+      /** @type {number} */
+      a;
+      /** @type {number} */
+      b;
+      /** @type {number} */
+      g;
+      /** @type {number} */
+      r;
+
+      constructor(r, g, b, a = 255) {
+        this.r = r;
+        this.g = g;
+        this.b = b;
+        this.a = a;
+      }
+
+      /**
+       * @param {string} hex
+       * @returns {Color}
+       */
+      static fromHex(hex) {
+        let int = parseInt(hex.replace(/^#/, ""), 16);
+        const byte = () => {
+          const rem = int % 256;
+          int >>= 8;
+          return rem;
+        };
+        let a = 255;
+        if (hex.length >= 8) {
+          a = byte();
+        }
+        const b = byte();
+        const g = byte();
+        const r = byte();
+        return new Color(r, g, b, a);
+      }
+
+      /**
+       * @param {number} n
+       * @returns {string}
+       */
+      static hexByte(n) {
+        const hex = n.toString(16);
+        return hex.length < 2 ? "0".concat(hex) : hex;
+      }
+
+      /**
+       * @param {number} brightness in the range [0...1]
+       * @return {Color}
+       */
+      dim(brightness) {
+        return new Color(
+          Math.trunc(this.r * brightness),
+          Math.trunc(this.g * brightness),
+          Math.trunc(this.b * brightness),
+          this.a,
+        );
+      }
+
+      /**
+       * @returns {string}
+       */
+      toHex() {
+        const parts = [
+          "#",
+          Color.hexByte(this.r),
+          Color.hexByte(this.g),
+          Color.hexByte(this.b),
+        ];
+        if (this.a !== 255) {
+          parts.push(Color.hexByte(this.a));
+        }
+        return parts.join("");
+      }
+    }
+
+    /**
+     * A model for both the drawing and interaction of the game.
+     * This could likely be simplified a bit by extracting out some
+     * concerns, like touch tracking.  But it's not too bad, and is
+     * actually pretty easy to step through this way ... so :shrug:.
+     */
+    class DetanglerActor {
+      /** @type {HTMLCanvasElement} */
+      #canvas;
+      /** @type {function(MouseEvent):void} */
+      #downListener;
+      /** @type {CanvasRenderingContext2D} */
+      #draw;
+      /** @type {number} */
+      #drawCount = 0;
+      /** @type {number|null} */
+      #fadeStarted = null;
+      /** @type {DetanglerGame} */
+      #game;
+      /** @type {number} */
+      #height;
+      /** @type {function(MouseEvent):void} */
+      #moveListener;
+      /** @type {function():void} */
+      #onDetangled;
+      /** @type {number} */
+      #startTime = Date.now();
+      /** @type {Theme} */
+      #theme;
+      /** @type {function(TouchEvent):void} */
+      #touchEndListener;
+      /** @type {function(TouchEvent):void} */
+      #touchMoveListener;
+      /** @type {function(TouchEvent):void} */
+      #touchStartListener;
+      /** @type {number} */
+      #touchedPoint = -1;
+      /** @type {function(MouseEvent):void} */
+      #upListener;
+      /** @type {number} */
+      #width;
+
+      /**
+       * @param {number} pointCount
+       * @param {HTMLCanvasElement} canvas
+       * @param {function():void} onDetangled
+       */
+      constructor(pointCount, canvas, onDetangled) {
+        this.#canvas = canvas;
+        this.#width = canvas.width;
+        this.#height = canvas.height;
+        this.#game = new DetanglerGame(pointCount, canvas.width, canvas.height);
+        this.#draw = canvas.getContext("2d", {
+          alpha: false,
+          antialias: true,
+        });
+        this.#onDetangled = onDetangled;
+        this.#theme = Theme.random();
+        const pixel = window.devicePixelRatio;
+        // Save these, so they can be `removeEventListener`-ed later.
+        // But also: you need to translate from page (px) coordinates to their
+        // ratio-ed (sub-px) counterpart.
+        this.#downListener = (event) => this.onDown(event.offsetX * pixel, event.offsetY * pixel);
+        this.#moveListener = (event) => this.onMove(event.offsetX * pixel, event.offsetY * pixel);
+        this.#upListener = (event) => this.onUp(event.offsetX * pixel, event.offsetY * pixel);
+        /**
+         * @param {TouchEvent} event
+         * @param {function(number,number):void} callback
+         */
+        const withOneTouch = (event, callback) => {
+          /** @type {Touch|undefined} */
+          let touch = undefined;
+          if (event.changedTouches?.length === 1) {
+            touch = event.changedTouches[0];
+          } else if (event.touches?.length === 1) {
+            touch = event.touches.item(0);
+          }
+          if (touch != null) {
+            callback(touch.clientX * pixel, touch.clientY * pixel);
+            event.preventDefault();
+          }
+        };
+        // Yes, this is a total hack and is probably horrible for accessibility.  Sigh.
+        this.#touchEndListener = (event) => withOneTouch(event, (x, y) => this.onUp(x, y));
+        this.#touchMoveListener = (event) => withOneTouch(event, (x, y) => this.onMove(x, y));
+        this.#touchStartListener = (event) => withOneTouch(event, (x, y) => this.onDown(x, y));
+        canvas.addEventListener("mousedown", this.#downListener);
+        canvas.addEventListener("mouseup", this.#upListener);
+        canvas.addEventListener("touchstart", this.#touchStartListener);
+        canvas.addEventListener("touchend", this.#touchEndListener);
+        // To save battery on mobile devices, redraw only on demand,
+        // not on a schedule.
+        this.animate();
+      }
+
+      get edgeWidth() {
+        // This magic number just makes for nice-sized edges without
+        // too much eye strain.
+        return Math.round(Math.min(this.#canvas.clientWidth, this.#canvas.clientHeight) / 32);
+      }
+
+      /**
+       * Request a redraw.
+       * @param {function(number):void} [timestampCallback]
+       * @returns {void}
+       */
+      animate(timestampCallback) {
+        requestAnimationFrame((timestamp) => {
+          timestampCallback?.(timestamp);
+          this.draw(timestamp);
+        });
+      }
+
+      /**
+       * The actual drawing logic.
+       * @param {number} timestamp
+       */
+      draw(timestamp) {
+        this.#drawCount++;
+        const d = this.#draw;
+        d.fillStyle = "black";
+        d.fillRect(0, 0, this.#width, this.#height);
+        d.lineCap = "round";
+        const edges = this.#game.edges;
+        const points = this.#game.points;
+        const edgeWidth = this.edgeWidth;
+        const pointRadius = edgeWidth * 2;
+        let {edgeDefault, edgeIntersected, edgeTouched, pointTouched, pointDefault} = this.#theme;
+        if (this.#fadeStarted !== null) {
+          const elapsed = timestamp - this.#fadeStarted;
+          const remain = Math.max(0, 1000 - elapsed);
+          const intensity = remain / 1000;
+          edgeDefault = Color.fromHex(edgeDefault).dim(intensity).toHex();
+          edgeIntersected = Color.fromHex(edgeIntersected).dim(intensity).toHex();
+          edgeTouched = Color.fromHex(edgeTouched).dim(intensity).toHex();
+          pointTouched = Color.fromHex(pointTouched).dim(intensity).toHex();
+          pointDefault = Color.fromHex(pointDefault).dim(intensity).toHex();
+          if (remain > 0) {
+            this.animate();
+          } else {
+            const durationSecs = Math.round((Date.now() - this.#startTime) / 1000);
+            if (durationSecs > 0) {
+              const fps = this.#drawCount / durationSecs;
+              console.log(`Finished ${points.length} after ${durationSecs}s.  Drew ${this.#drawCount} frames for ${fps.toPrecision(3)}fps.`);
+            }
+            this.#onDetangled();
+          }
+        }
+        const twoPi = Math.PI * 2;
+        d.lineWidth = edgeWidth;
+        // Draw the touched edges over the untouched edges, to make it clearer.
+        for (let whenTouched of [false, true]) {
+          for (let edgeIndex = 0; edgeIndex < edges.length; edgeIndex++) {
+            const edge = edges[edgeIndex];
+            const touched = edge.low === this.#touchedPoint || edge.high === this.#touchedPoint;
+            if (touched === whenTouched) {
+              const p1 = points[edge.low];
+              const p2 = points[edge.high];
+              const intersected = this.#game.intersectionCountForEdge(edgeIndex) > 0;
+              const color = touched ? edgeTouched : intersected ? edgeIntersected : edgeDefault;
+              d.beginPath();
+              d.moveTo(p1.x, p1.y);
+              d.lineTo(p2.x, p2.y);
+              d.lineWidth = edgeWidth;
+              d.strokeStyle = color;
+              d.stroke();
+            }
+          }
+        }
+        d.strokeStyle = "none";
+        for (let pointIndex = 0; pointIndex < points.length; pointIndex++) {
+          const point = points[pointIndex];
+          const touched = pointIndex === this.#touchedPoint;
+          // noinspection UnnecessaryLocalVariableJS
+          const color = touched ? pointTouched : pointDefault;
+          d.fillStyle = color;
+          d.beginPath();
+          d.arc(point.x, point.y, pointRadius, 0, twoPi);
+          d.fill();
+          d.closePath();
+          d.fillStyle = "black";
+          d.beginPath();
+          d.arc(point.x, point.y, edgeWidth, 0, twoPi);
+          d.fill();
+        }
+      }
+
+      /**
+       * @returns {[number,number]}
+       */
+      getCanvasSize() {
+        const pixels = window.devicePixelRatio;
+        const bounds = this.#canvas.getBoundingClientRect();
+        const width = bounds.width * pixels;
+        const height = bounds.height * pixels;
+        return [width, height];
+      }
+
+      /**
+       * @param {number} x
+       * @param {number} y
+       * @returns {void}
+       */
+      onDown(x, y) {
+        let closestDistance = -1;
+        let closestIndex = -1;
+        const points = this.#game.points;
+        const pointRadius = this.edgeWidth * 5;  // technically 2, but we fudge a bit
+        for (let i = 0; i < points.length; i++) {
+          const point = points[i];
+          const dx = x - point.x;
+          const dy = y - point.y;
+          const distance = Math.round(Math.sqrt(dx * dx + dy * dy));
+          if (distance <= pointRadius && (closestDistance === -1 || closestDistance > distance)) {
+            closestDistance = distance;
+            closestIndex = i;
+          }
+        }
+        if (closestIndex >= 0) {
+          if (this.#touchedPoint < 0) {
+            this.#canvas.addEventListener("mousemove", this.#moveListener);
+            this.#canvas.addEventListener("touchmove", this.#touchMoveListener);
+          }
+          this.#touchedPoint = closestIndex;
+          this.animate();
+        }
+      }
+
+      /**
+       * @param {number} x
+       * @param {number} y
+       * @returns {void}
+       */
+      onMove(x, y) {
+        if (this.#touchedPoint >= 0) {
+          const point = this.#game.points[this.#touchedPoint];
+          const before = Point.atXY(point.x, point.y);
+          const after = Point.atXY(x, y);
+          if (!before.equals(after)) {
+            this.#game.onPointMove(this.#touchedPoint, before, after);
+            this.animate();
+          }
+        }
+      }
+
+      /**
+       * @param {number} _x
+       * @param {number} _y
+       * @returns {void}
+       */
+      onUp(_x, _y) {
+        if (this.#touchedPoint >= 0) {
+          this.#touchedPoint = -1;
+          const detangled = this.#game.isDetangled();
+          const moveOnly = !detangled;
+          this.pauseInput(moveOnly);
+          const startFade = detangled ? ((fadeStarted) => {
+            this.#fadeStarted = fadeStarted;
+          }) : undefined;
+          this.animate(startFade);
+        }
+      }
+
+      /**
+       * @param {boolean} [moveOnly]
+       * @returns {void}
+       */
+      pauseInput(moveOnly = false) {
+        this.#canvas.removeEventListener("mousemove", this.#moveListener);
+        this.#canvas.removeEventListener("touchmove", this.#touchMoveListener);
+        if (!moveOnly) {
+          this.#canvas.removeEventListener("mousedown", this.#downListener);
+          this.#canvas.removeEventListener("mouseup", this.#upListener);
+          this.#canvas.removeEventListener("touchstart", this.#touchStartListener);
+          this.#canvas.removeEventListener("touchend", this.#touchEndListener);
+        }
+      }
+
+      resize() {
+        const [newWidth, newHeight] = this.getCanvasSize();
+        if (newWidth === this.#width && newHeight === this.#height) {
+          return;
+        }
+        this.#width = newWidth;
+        this.#height = newHeight;
+        this.#game.onResize(newWidth, newHeight);
+      }
+    }
+
+    window.addEventListener("load", () => {
+      let detanglerGame = null;
+      const canvas = document.getElementById("canvas");
+      // This bit of silliness is just ... ugh.
+      // https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API/Tutorial/Optimizing_canvas#scaling_for_high_resolution_displays
+      // I'm sure someone, somewhere, thinks it makes perfect sense.
+      // That person is a sociopath.
+      const bounds = canvas.getBoundingClientRect();
+      const pixels = window.devicePixelRatio ?? 1;
+      canvas.width = bounds.width * pixels;
+      canvas.height = bounds.height * pixels;
+      canvas.style.width = `${bounds.width}px`;
+      canvas.style.height = `${bounds.height}px`;
+      const paramsFromHash = () => {
+        /**
+         * Try to extract out state params from the URL hash.
+         * This allows us to send tangle URLs to our friends, and they
+         * _should_ see the same puzzle.
+         * @type {Record<string,string|number>}
+         */
+        const params = {};
+        if (window.location.hash != null && window.location.hash !== "") {
+          try {
+            window.location.hash
+              .replace(/^#?!?/, "")
+              .split("/")
+              .map((pair) => pair.split("=").map(decodeURIComponent))
+              .filter((pair) => pair.length === 2)
+              .forEach(([key, value]) => {
+                if (/^\d+$/.test(value)) {
+                  params[key] = parseInt(value);
+                } else {
+                  params[key] = value;
+                }
+              });
+          } catch (_e) {
+            // don't care
+          }
+        }
+        return params;
+      };
+      let pointCount = 8;
+      /**
+       * @param {number} pc
+       * @param {number} seed
+       * @returns {string}
+       */
+      const hashForState = (pc, seed) => `#!c=${pc}/s=${seed}`;
+      // We could add some logic here to save your place in LocalStorage ... but meh.
+      const startGame = () => {
+        const params = paramsFromHash();
+        // Seed for the RNG.
+        const rngSeed = typeof params.s === "number" ? params.s : Date.now();
+        // Starting count of points.
+        pointCount = typeof params.c === "number" ? params.c : pointCount;
+        const wantHash = hashForState(pointCount, rngSeed);
+        if (window.location.hash !== wantHash) {
+          window.history.replaceState({}, "", wantHash);
+        }
+        console.log(`Creating a tangle with ${pointCount} points.  Random seed: ${rngSeed}  GLHF.`);
+        Rand.instance = new Rand(rngSeed);
+        detanglerGame?.pauseInput(false);
+        detanglerGame = new DetanglerActor(pointCount, canvas, () => {
+          pointCount += 1;
+          const nextHash = hashForState(pointCount, rngSeed);
+          window.history.replaceState({}, "", nextHash);
+          setTimeout(startGame, 250);
+        });
+      };
+      startGame();
+      window.addEventListener("hashchange", () => {
+        startGame();
+      });
+      window.addEventListener("resize", () => {
+        detanglerGame?.onResize(window.innerWidth, window.innerHeight);
+      });
+    });
+  </script>
+</head>
+<body>
+<noscript>This game requires JavaScript. Sorry. I promise, it doesn't do anything untoward.</noscript>
+<canvas id="canvas">
+  This game requires the browser's Canvas element and isn't particularly audio-description-friendly.
+  Sorry about that.
+</canvas>
+</body>
+</html>

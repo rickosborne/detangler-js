@@ -1,0 +1,15 @@
+{
+  "author": {
+    "name": "Rick Osborne",
+    "url": "https://rickosborne.org"
+  },
+  "description": "detangler game by Rick Osborne",
+  "keywords": [
+    "game",
+    "planar"
+  ],
+  "license": "CC-BY-NC-SA",
+  "name": "detangler-js",
+  "private": true,
+  "version": "2024.11.22"
+}
