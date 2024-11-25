@@ -21,6 +21,7 @@
       margin: 0;
       overscroll-behavior: none;
       padding: 0;
+      overflow: hidden;
       text-decoration: none;
       text-indent: 0;
     }
@@ -29,6 +30,7 @@
       background-color: black;
       height: 100%;
       left: 0;
+      overflow: hidden;
       position: absolute;
       top: 0;
       width: 100%;
@@ -977,6 +979,8 @@
        * @param {function():void} onDetangled
        */
       constructor(pointCount, canvas, onDetangled) {
+        // Burn through some random numbers, so subsequent games don't always start the same.
+        for (let i = 0; i < pointCount; i++) Rand.instance.int();
         this.#canvas = canvas;
         this.#width = canvas.width;
         this.#height = canvas.height;
