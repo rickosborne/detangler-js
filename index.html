@@ -19,9 +19,9 @@
       font-size: 100%;
       list-style: none;
       margin: 0;
+      overflow: hidden;
       overscroll-behavior: none;
       padding: 0;
-      overflow: hidden;
       text-decoration: none;
       text-indent: 0;
     }
@@ -1093,11 +1093,17 @@
               const p2 = points[edge.high];
               const intersected = this.#game.intersectionCountForEdge(edgeIndex) > 0;
               const color = touched ? edgeTouched : intersected ? edgeIntersected : edgeDefault;
+              const darker = Color.fromHex(color).dim(0.75).toHex();
+              const gradient = d.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+              gradient.addColorStop(0, darker);
+              gradient.addColorStop(0.25, color);
+              gradient.addColorStop(0.75, color);
+              gradient.addColorStop(1, darker);
               d.beginPath();
               d.moveTo(p1.x, p1.y);
               d.lineTo(p2.x, p2.y);
               d.lineWidth = edgeWidth;
-              d.strokeStyle = color;
+              d.strokeStyle = gradient;
               d.stroke();
             }
           }
