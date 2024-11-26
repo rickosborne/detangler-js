@@ -801,7 +801,8 @@
       onResize(width, height) {
         this.#width = width;
         this.#height = height;
-        this.#tangle = this.#tangle.scale(new Rectangle(0, 0, width, height));
+        const margin = Math.round(Math.min(this.#width, this.#height) * 0.1);
+        this.#tangle = this.#tangle.scale(new Rectangle(margin, margin, width - (2 * margin), height - (2 * margin)));
       }
     }
 
@@ -950,12 +951,16 @@
       #fadeStarted = null;
       /** @type {DetanglerGame} */
       #game;
+      /** @type {boolean} */
+      #gradients;
       /** @type {number} */
       #height;
       /** @type {function(MouseEvent):void} */
       #moveListener;
       /** @type {function():void} */
       #onDetangled;
+      /** @type {number} */
+      #sizeDivisor;
       /** @type {number} */
       #startTime = Date.now();
       /** @type {Theme} */
@@ -975,15 +980,19 @@
 
       /**
        * @param {number} pointCount
+       * @param {number} sizeDivisor
+       * @param {boolean} gradients
        * @param {HTMLCanvasElement} canvas
        * @param {function():void} onDetangled
        */
-      constructor(pointCount, canvas, onDetangled) {
+      constructor(pointCount, sizeDivisor, gradients, canvas, onDetangled) {
         // Burn through some random numbers, so subsequent games don't always start the same.
         for (let i = 0; i < pointCount; i++) Rand.instance.int();
         this.#canvas = canvas;
         this.#width = canvas.width;
         this.#height = canvas.height;
+        this.#sizeDivisor = sizeDivisor;
+        this.#gradients = gradients;
         this.#game = new DetanglerGame(pointCount, canvas.width, canvas.height);
         this.#draw = canvas.getContext("2d", {
           alpha: false,
@@ -1031,7 +1040,7 @@
       get edgeWidth() {
         // This magic number just makes for nice-sized edges without
         // too much eye strain.
-        return Math.round(Math.min(this.#canvas.clientWidth, this.#canvas.clientHeight) / 32);
+        return Math.round(Math.min(this.#canvas.clientWidth, this.#canvas.clientHeight) / this.#sizeDivisor);
       }
 
       /**
@@ -1093,17 +1102,21 @@
               const p2 = points[edge.high];
               const intersected = this.#game.intersectionCountForEdge(edgeIndex) > 0;
               const color = touched ? edgeTouched : intersected ? edgeIntersected : edgeDefault;
-              const darker = Color.fromHex(color).dim(0.75).toHex();
-              const gradient = d.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
-              gradient.addColorStop(0, darker);
-              gradient.addColorStop(0.25, color);
-              gradient.addColorStop(0.75, color);
-              gradient.addColorStop(1, darker);
               d.beginPath();
               d.moveTo(p1.x, p1.y);
               d.lineTo(p2.x, p2.y);
               d.lineWidth = edgeWidth;
-              d.strokeStyle = gradient;
+              if (this.#gradients) {
+                const darker = Color.fromHex(color).dim(0.75).toHex();
+                const gradient = d.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+                gradient.addColorStop(0, darker);
+                gradient.addColorStop(0.25, color);
+                gradient.addColorStop(0.75, color);
+                gradient.addColorStop(1, darker);
+                d.strokeStyle = gradient;
+              } else {
+                d.strokeStyle = color;
+              }
               d.stroke();
             }
           }
@@ -1127,14 +1140,13 @@
       }
 
       /**
-       * @returns {[number,number]}
+       * @returns {[number,number,number,number]}
        */
       getCanvasSize() {
         const pixels = window.devicePixelRatio;
-        const bounds = this.#canvas.getBoundingClientRect();
-        const width = bounds.width * pixels;
-        const height = bounds.height * pixels;
-        return [width, height];
+        const width = window.innerWidth * pixels;
+        const height = window.innerHeight * pixels;
+        return [width, height, window.innerWidth, window.innerHeight];
       }
 
       /**
@@ -1176,12 +1188,30 @@
         if (this.#touchedPoint >= 0) {
           const point = this.#game.points[this.#touchedPoint];
           const before = Point.atXY(point.x, point.y);
-          const after = Point.atXY(x, y);
+          const clampedX = Math.min(Math.max(this.edgeWidth, x), this.#width - this.edgeWidth - 1);
+          const clampedY = Math.min(Math.max(this.edgeWidth, y), this.#height - this.edgeWidth - 1);
+          const after = Point.atXY(clampedX, clampedY);
           if (!before.equals(after)) {
             this.#game.onPointMove(this.#touchedPoint, before, after);
             this.animate();
           }
         }
+      }
+
+      onResize() {
+        const [newWidth, newHeight, pxWidth, pxHeight] = this.getCanvasSize();
+        if (newWidth === this.#width && newHeight === this.#height) {
+          return;
+        }
+        // console.log(`Resize: ${this.#width}x${this.#height} -> ${newWidth}x${newHeight}`);
+        this.#canvas.width = newWidth;
+        this.#canvas.height = newHeight;
+        this.#width = newWidth;
+        this.#height = newHeight;
+        this.#canvas.style.width = `${pxWidth}px`;
+        this.#canvas.style.height = `${pxHeight}px`;
+        this.#game.onResize(newWidth, newHeight);
+        this.animate();
       }
 
       /**
@@ -1216,16 +1246,6 @@
           this.#canvas.removeEventListener("touchend", this.#touchEndListener);
         }
       }
-
-      resize() {
-        const [newWidth, newHeight] = this.getCanvasSize();
-        if (newWidth === this.#width && newHeight === this.#height) {
-          return;
-        }
-        this.#width = newWidth;
-        this.#height = newHeight;
-        this.#game.onResize(newWidth, newHeight);
-      }
     }
 
     window.addEventListener("load", () => {
@@ -1241,11 +1261,19 @@
       canvas.height = bounds.height * pixels;
       canvas.style.width = `${bounds.width}px`;
       canvas.style.height = `${bounds.height}px`;
+      console.log(`Sizing: window=${window.innerWidth}x${window.innerHeight}, canvas-bounds:${bounds.width}x${bounds.height}, pixels=${pixels}, canvas-effective=${canvas.width}x${canvas.height}`);
       const paramsFromHash = () => {
         /**
          * Try to extract out state params from the URL hash.
          * This allows us to send tangle URLs to our friends, and they
          * _should_ see the same puzzle.
+         * These will end up producing a hash which looks like:
+         * {@code #!c=64/s=1732641021784/d=48/g=0}
+         * The parameters are:
+         * <li>{@code c} for point count</li>
+         * <li>{@code s} for RNG seed</li>
+         * <li>{@code d} for size divisor. Defaults to 32.  High values produce smaller circles and edges.</li>
+         * <li>{@code g} to disable gradients to speed things up, if set to exactly 0.
          * @type {Record<string,string|number>}
          */
         const params = {};
@@ -1273,9 +1301,16 @@
       /**
        * @param {number} pc
        * @param {number} seed
+       * @param {number} divisor
+       * @param {boolean} gradients
        * @returns {string}
        */
-      const hashForState = (pc, seed) => `#!c=${pc}/s=${seed}`;
+      const hashForState = (pc, seed, divisor, gradients) => [
+        `#!c=${pc}`,
+        `s=${seed}`,
+        divisor === 32 ? null : `d=${divisor}`,
+        gradients ? null : "g=0"
+      ].filter((s) => s != null && s !== "").join("/");
       // We could add some logic here to save your place in LocalStorage ... but meh.
       const startGame = () => {
         const params = paramsFromHash();
@@ -1283,16 +1318,18 @@
         const rngSeed = typeof params.s === "number" ? params.s : Date.now();
         // Starting count of points.
         pointCount = typeof params.c === "number" ? params.c : pointCount;
-        const wantHash = hashForState(pointCount, rngSeed);
+        const divisor = typeof params.d === "number" ? params.d : 32;
+        const gradients = params.g !== 0;
+        const wantHash = hashForState(pointCount, rngSeed, divisor, gradients);
         if (window.location.hash !== wantHash) {
           window.history.replaceState({}, "", wantHash);
         }
         console.log(`Creating a tangle with ${pointCount} points.  Random seed: ${rngSeed}  GLHF.`);
         Rand.instance = new Rand(rngSeed);
         detanglerGame?.pauseInput(false);
-        detanglerGame = new DetanglerActor(pointCount, canvas, () => {
+        detanglerGame = new DetanglerActor(pointCount, divisor, gradients, canvas, () => {
           pointCount += 1;
-          const nextHash = hashForState(pointCount, rngSeed);
+          const nextHash = hashForState(pointCount, rngSeed, divisor, gradients);
           window.history.replaceState({}, "", nextHash);
           setTimeout(startGame, 250);
         });
@@ -1302,7 +1339,7 @@
         startGame();
       });
       window.addEventListener("resize", () => {
-        detanglerGame?.onResize(window.innerWidth, window.innerHeight);
+        detanglerGame?.onResize();
       });
     });
   </script>
