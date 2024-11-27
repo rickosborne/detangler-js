@@ -806,54 +806,20 @@
       }
     }
 
-    /**
-     * @typedef ThemeColor
-     * @type {string | CanvasGradient | CanvasPattern}
-     */
-
-    /**
-     * A set of colors in which the game should be drawn.
-     */
-    class Theme {
-      static DefaultGray = "#777777";
-      static DefaultSilver = "#eeeeee";
-      static Ace = new Theme("#5e1984", "#9e9e9e", "#3da542", Theme.DefaultSilver, "#ffffff");
-      static Eight = new Theme("#fcf431", Theme.DefaultGray, Theme.DefaultSilver, "#9d59d2", "#ffffff");
-      static Jack = new Theme("#bcc4c7", Theme.DefaultGray, Theme.DefaultSilver, "#a5fa5e", "#ffffff");
-      static Joker = new Theme("#21b0fe", Theme.DefaultGray, "#fed700", "#fe218b", Theme.DefaultGray);
-      static King = new Theme("#fe941e", Theme.DefaultGray, "#ffff00", "#ff1e26", Theme.DefaultGray);
-      static Nine = new Theme("#b57edc", Theme.DefaultGray, Theme.DefaultSilver, "#4a8122", "#ffffff");
-      static Queen = new Theme("#a20161", "#fd9855", "#d42c00", "#ffffff", "#d161a2");
-      static Seven = new Theme("#d70071", Theme.DefaultGray, "#0035aa", "#9c4e97", Theme.DefaultGray);
-      static Ten = new Theme("#f6aab7", Theme.DefaultGray, Theme.DefaultSilver, "#55cdfd", "#ffffff");
-      static All = [Theme.Ace, Theme.King, Theme.Queen, Theme.Jack, Theme.Ten, Theme.Nine, Theme.Eight, Theme.Seven, Theme.Joker];
-      /** type {ThemeColor} */
-      edgeDefault;
-      /** type {ThemeColor} */
-      edgeIntersected;
-      /** type {ThemeColor} */
-      edgeTouched;
-      /** type {ThemeColor} */
-      pointDefault;
-      /** type {ThemeColor} */
-      pointTouched;
-
-      constructor(edgeDefault, edgeIntersected, edgeTouched, pointDefault, pointTouched) {
-        this.edgeDefault = edgeDefault;
-        this.edgeIntersected = edgeIntersected;
-        this.edgeTouched = edgeTouched;
-        this.pointDefault = pointDefault;
-        this.pointTouched = pointTouched;
-      }
-
+    class Interpolate {
       /**
-       * @returns {Theme}
+       * @param {number} a
+       * @param {number} b
+       * @param {number} percent
        */
-      static random() {
-        const index = Rand.index(Theme.All.length);
-        return Theme.All[index];
+      static linearRound(a, b, percent) {
+        if (a === b) {
+          return a;
+        }
+        return a + Math.round((b - a) * percent);
       }
     }
+
 
     class Color {
       /** @type {number} */
@@ -862,14 +828,17 @@
       b;
       /** @type {number} */
       g;
+      /** @type {string} */
+      hex;
       /** @type {number} */
       r;
 
-      constructor(r, g, b, a = 255) {
+      constructor(r, g, b, a = 255, hex) {
         this.r = r;
         this.g = g;
         this.b = b;
         this.a = a;
+        this.hex = hex ?? this.toHex();
       }
 
       /**
@@ -890,7 +859,7 @@
         const b = byte();
         const g = byte();
         const r = byte();
-        return new Color(r, g, b, a);
+        return new Color(r, g, b, a, hex);
       }
 
       /**
@@ -900,6 +869,20 @@
       static hexByte(n) {
         const hex = n.toString(16);
         return hex.length < 2 ? "0".concat(hex) : hex;
+      }
+
+      /**
+       * @param {Color} other
+       * @param {number} percent
+       * @returns {Color}
+       */
+      combine(other, percent) {
+        return new Color(
+          Interpolate.linearRound(this.r, other.r, percent),
+          Interpolate.linearRound(this.g, other.g, percent),
+          Interpolate.linearRound(this.b, other.b, percent),
+          Interpolate.linearRound(this.a, other.a, percent),
+        );
       }
 
       /**
@@ -919,16 +902,63 @@
        * @returns {string}
        */
       toHex() {
-        const parts = [
-          "#",
-          Color.hexByte(this.r),
-          Color.hexByte(this.g),
-          Color.hexByte(this.b),
-        ];
-        if (this.a !== 255) {
-          parts.push(Color.hexByte(this.a));
+        if (this.hex == null) {
+          const parts = [
+            "#",
+            Color.hexByte(this.r),
+            Color.hexByte(this.g),
+            Color.hexByte(this.b),
+          ];
+          if (this.a !== 255) {
+            parts.push(Color.hexByte(this.a));
+          }
+          this.hex = parts.join("");
         }
-        return parts.join("");
+        return this.hex;
+      }
+    }
+
+    /**
+     * A set of colors in which the game should be drawn.
+     */
+    class Theme {
+      static DefaultGray = "#777777";
+      static DefaultSilver = "#eeeeee";
+      static Ace = new Theme("#5e1984", "#9e9e9e", "#3da542", Theme.DefaultSilver, "#ffffff");
+      static Eight = new Theme("#fcf431", Theme.DefaultGray, Theme.DefaultSilver, "#9d59d2", "#ffffff");
+      static Jack = new Theme("#bcc4c7", Theme.DefaultGray, Theme.DefaultSilver, "#a5fa5e", "#ffffff");
+      static Joker = new Theme("#21b0fe", Theme.DefaultGray, "#fed700", "#fe218b", "#fed700");
+      static King = new Theme("#fe941e", Theme.DefaultGray, "#ffff00", "#ff1e26", "#ffff00");
+      static Nine = new Theme("#b57edc", Theme.DefaultGray, Theme.DefaultSilver, "#4a8122", "#ffffff");
+      static Queen = new Theme("#a20161", "#fd9855", "#d42c00", "#ffffff", "#d161a2");
+      static Seven = new Theme("#d70071", Theme.DefaultGray, "#0035aa", "#9c4e97", Theme.DefaultGray);
+      static Ten = new Theme("#f6aab7", Theme.DefaultGray, Theme.DefaultSilver, "#55cdfd", "#ffffff");
+      static All = [Theme.Ace, Theme.King, Theme.Queen, Theme.Jack, Theme.Ten, Theme.Nine, Theme.Eight, Theme.Seven, Theme.Joker];
+      /** @type {Color} */
+      edgeDefault;
+      /** @type {Color} */
+      edgeIntersected;
+      /** @type {Color} */
+      edgeTouched;
+      /** @type {Color} */
+      pointDefault;
+      /** @type {Color} */
+      pointTouched;
+
+      constructor(edgeDefault, edgeIntersected, edgeTouched, pointDefault, pointTouched) {
+        this.edgeDefault = Color.fromHex(edgeDefault);
+        this.edgeIntersected = Color.fromHex(edgeIntersected);
+        this.edgeTouched = Color.fromHex(edgeTouched);
+        this.pointDefault = Color.fromHex(pointDefault);
+        this.pointTouched = Color.fromHex(pointTouched);
+      }
+
+      /**
+       * @returns {Theme}
+       */
+      static random() {
+        const index = Rand.index(Theme.All.length);
+        return Theme.All[index];
       }
     }
 
@@ -941,12 +971,18 @@
     class DetanglerActor {
       /** @type {HTMLCanvasElement} */
       #canvas;
+      /** @type {Map<number,number>} */
+      #coolingEdges;
+      /** @type {Map<number,number>} */
+      #coolingPoints;
       /** @type {function(MouseEvent):void} */
       #downListener;
       /** @type {CanvasRenderingContext2D} */
       #draw;
       /** @type {number} */
       #drawCount = 0;
+      /** @type {number|null} */
+      #edgeWidth;
       /** @type {number|null} */
       #fadeStarted = null;
       /** @type {DetanglerGame} */
@@ -957,6 +993,8 @@
       #height;
       /** @type {function(MouseEvent):void} */
       #moveListener;
+      /** @type {(function(number):void)[]} */
+      #onAnimates = [];
       /** @type {function():void} */
       #onDetangled;
       /** @type {number} */
@@ -977,6 +1015,8 @@
       #upListener;
       /** @type {number} */
       #width;
+      /** @type {boolean} */
+      #willAnimate = false;
 
       /**
        * @param {number} pointCount
@@ -992,7 +1032,10 @@
         this.#width = canvas.width;
         this.#height = canvas.height;
         this.#sizeDivisor = sizeDivisor;
+        this.#edgeWidth = null;
         this.#gradients = gradients;
+        this.#coolingEdges = new Map();
+        this.#coolingPoints = new Map();
         this.#game = new DetanglerGame(pointCount, canvas.width, canvas.height);
         this.#draw = canvas.getContext("2d", {
           alpha: false,
@@ -1034,25 +1077,41 @@
         canvas.addEventListener("touchend", this.#touchEndListener);
         // To save battery on mobile devices, redraw only on demand,
         // not on a schedule.
-        this.animate();
+        this.animate("constructor");
       }
 
       get edgeWidth() {
-        // This magic number just makes for nice-sized edges without
-        // too much eye strain.
-        return Math.round(Math.min(this.#canvas.clientWidth, this.#canvas.clientHeight) / this.#sizeDivisor);
+        this.#edgeWidth ??= Math.round(Math.min(this.#canvas.clientWidth, this.#canvas.clientHeight) / this.#sizeDivisor);
+        return this.#edgeWidth;
       }
 
       /**
        * Request a redraw.
+       * @param {string} caller
        * @param {function(number):void} [timestampCallback]
        * @returns {void}
        */
-      animate(timestampCallback) {
+      animate(caller, timestampCallback) {
+        if (timestampCallback != null) {
+          this.#onAnimates.push(timestampCallback);
+        }
+        if (this.#willAnimate) {
+          return;
+        }
+        this.#willAnimate = true;
+        // console.log(`RAF: ${caller}`);
         requestAnimationFrame((timestamp) => {
-          timestampCallback?.(timestamp);
+          this.#willAnimate = false;
           this.draw(timestamp);
         });
+      }
+
+      coolEdge(edgeIndex) {
+        this.#coolingEdges.delete(edgeIndex);
+      }
+
+      coolPoint(pointIndex) {
+        this.#coolingPoints.delete(pointIndex);
       }
 
       /**
@@ -1060,6 +1119,14 @@
        * @param {number} timestamp
        */
       draw(timestamp) {
+        if (this.#onAnimates.length > 0) {
+          // console.log(`onAnimate: ${this.#onAnimates.length}`);
+          this.#onAnimates.forEach((callback) => {
+            // console.log(callback.toString());
+            callback(timestamp);
+          });
+          this.#onAnimates = [];
+        }
         this.#drawCount++;
         const d = this.#draw;
         d.fillStyle = "black";
@@ -1069,18 +1136,20 @@
         const points = this.#game.points;
         const edgeWidth = this.edgeWidth;
         const pointRadius = edgeWidth * 2;
+        const coolTimeMs = 2_000;
         let {edgeDefault, edgeIntersected, edgeTouched, pointTouched, pointDefault} = this.#theme;
+        let queueAnotherDraw = false;
         if (this.#fadeStarted !== null) {
           const elapsed = timestamp - this.#fadeStarted;
-          const remain = Math.max(0, 1000 - elapsed);
-          const intensity = remain / 1000;
-          edgeDefault = Color.fromHex(edgeDefault).dim(intensity).toHex();
-          edgeIntersected = Color.fromHex(edgeIntersected).dim(intensity).toHex();
-          edgeTouched = Color.fromHex(edgeTouched).dim(intensity).toHex();
-          pointTouched = Color.fromHex(pointTouched).dim(intensity).toHex();
-          pointDefault = Color.fromHex(pointDefault).dim(intensity).toHex();
+          const remain = Math.max(0, coolTimeMs - elapsed);
+          const intensity = remain / coolTimeMs;
+          edgeDefault = edgeDefault.dim(intensity);
+          edgeIntersected = edgeIntersected.dim(intensity);
+          edgeTouched = edgeTouched.dim(intensity);
+          pointTouched = pointTouched.dim(intensity);
+          pointDefault = pointDefault.dim(intensity);
           if (remain > 0) {
-            this.animate();
+            queueAnotherDraw = true;
           } else {
             const durationSecs = Math.round((Date.now() - this.#startTime) / 1000);
             if (durationSecs > 0) {
@@ -1088,54 +1157,102 @@
               console.log(`Finished ${points.length} after ${durationSecs}s.  Drew ${this.#drawCount} frames for ${fps.toPrecision(3)}fps.`);
             }
             this.#onDetangled();
+            return;
           }
         }
         const twoPi = Math.PI * 2;
         d.lineWidth = edgeWidth;
-        // Draw the touched edges over the untouched edges, to make it clearer.
-        for (let whenTouched of [false, true]) {
-          for (let edgeIndex = 0; edgeIndex < edges.length; edgeIndex++) {
+        /** @type {number[]} */
+        const touchedIndexes = [];
+        /** @type {number[]} */
+        const coolingIndexes = [];
+        /** @type {number[]} */
+        const idleIndexes = [];
+        for (let edgeIndex = 0; edgeIndex < edges.length; edgeIndex++) {
+          const edge = edges[edgeIndex];
+          const touched = edge.low === this.#touchedPoint || edge.high === this.#touchedPoint;
+          if (touched) {
+            touchedIndexes.push(edgeIndex);
+            continue;
+          }
+          const temp = this.#coolingEdges.get(edgeIndex);
+          if (temp != null) {
+            const remainPercent = (coolTimeMs - (timestamp - temp)) / coolTimeMs;
+            if (remainPercent > 0) {
+              coolingIndexes.push(edgeIndex);
+              continue;
+            } else {
+              this.coolEdge(edgeIndex);
+            }
+          }
+          idleIndexes.push(edgeIndex);
+        }
+        for (const edgeList of [idleIndexes, coolingIndexes, touchedIndexes]) {
+          for (const edgeIndex of edgeList) {
             const edge = edges[edgeIndex];
             const touched = edge.low === this.#touchedPoint || edge.high === this.#touchedPoint;
-            if (touched === whenTouched) {
-              const p1 = points[edge.low];
-              const p2 = points[edge.high];
-              const intersected = this.#game.intersectionCountForEdge(edgeIndex) > 0;
-              const color = touched ? edgeTouched : intersected ? edgeIntersected : edgeDefault;
-              d.beginPath();
-              d.moveTo(p1.x, p1.y);
-              d.lineTo(p2.x, p2.y);
-              d.lineWidth = edgeWidth;
-              if (this.#gradients) {
-                const darker = Color.fromHex(color).dim(0.75).toHex();
-                const gradient = d.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
-                gradient.addColorStop(0, darker);
-                gradient.addColorStop(0.25, color);
-                gradient.addColorStop(0.75, color);
-                gradient.addColorStop(1, darker);
-                d.strokeStyle = gradient;
-              } else {
-                d.strokeStyle = color;
+            const p1 = points[edge.low];
+            const p2 = points[edge.high];
+            const intersected = this.#game.intersectionCountForEdge(edgeIndex) > 0;
+            let color = touched ? edgeTouched : intersected ? edgeIntersected : edgeDefault;
+            if (!touched) {
+              const temp = this.#coolingEdges.get(edgeIndex);
+              if (temp != null) {
+                const remainPercent = (coolTimeMs - (timestamp - temp)) / coolTimeMs;
+                if (remainPercent <= 0) {
+                  this.coolEdge(edgeIndex);
+                } else {
+                  color = color.combine(edgeTouched, remainPercent);
+                }
               }
-              d.stroke();
             }
+            d.beginPath();
+            d.moveTo(p1.x, p1.y);
+            d.lineTo(p2.x, p2.y);
+            d.lineWidth = edgeWidth;
+            if (this.#gradients) {
+              const darker = color.dim(0.75);
+              const gradient = d.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+              gradient.addColorStop(0, darker.hex);
+              gradient.addColorStop(0.25, color.hex);
+              gradient.addColorStop(0.75, color.hex);
+              gradient.addColorStop(1, darker.hex);
+              d.strokeStyle = gradient;
+            } else {
+              d.strokeStyle = color.hex;
+            }
+            d.stroke();
           }
         }
         d.strokeStyle = "none";
         for (let pointIndex = 0; pointIndex < points.length; pointIndex++) {
           const point = points[pointIndex];
           const touched = pointIndex === this.#touchedPoint;
-          // noinspection UnnecessaryLocalVariableJS
-          const color = touched ? pointTouched : pointDefault;
-          d.fillStyle = color;
+          const baseColor = touched ? pointTouched : pointDefault;
+          let color = baseColor;
+          const temp = this.#coolingPoints.get(pointIndex);
+          if (temp != null) {
+            const remainPercent = (coolTimeMs - (timestamp - temp)) / coolTimeMs;
+            if (remainPercent <= 0) {
+              this.coolPoint(pointIndex);
+            } else {
+              color = baseColor.combine(pointTouched, remainPercent);
+            }
+          }
+          d.fillStyle = color.hex;
           d.beginPath();
           d.arc(point.x, point.y, pointRadius, 0, twoPi);
           d.fill();
-          d.closePath();
           d.fillStyle = "black";
           d.beginPath();
           d.arc(point.x, point.y, edgeWidth, 0, twoPi);
           d.fill();
+        }
+        if (this.#coolingPoints.size > 0 || this.#coolingEdges.size > 0) {
+          queueAnotherDraw = true;
+        }
+        if (queueAnotherDraw) {
+          this.animate("draw");
         }
       }
 
@@ -1175,7 +1292,9 @@
             this.#canvas.addEventListener("touchmove", this.#touchMoveListener);
           }
           this.#touchedPoint = closestIndex;
-          this.animate();
+          this.animate("onDown", (ts) => {
+            this.warmNeighbors(closestIndex, ts);
+          });
         }
       }
 
@@ -1185,15 +1304,18 @@
        * @returns {void}
        */
       onMove(x, y) {
-        if (this.#touchedPoint >= 0) {
-          const point = this.#game.points[this.#touchedPoint];
+        const touchedPoint = this.#touchedPoint;
+        if (touchedPoint >= 0) {
+          const point = this.#game.points[touchedPoint];
           const before = Point.atXY(point.x, point.y);
           const clampedX = Math.min(Math.max(this.edgeWidth, x), this.#width - this.edgeWidth - 1);
           const clampedY = Math.min(Math.max(this.edgeWidth, y), this.#height - this.edgeWidth - 1);
           const after = Point.atXY(clampedX, clampedY);
           if (!before.equals(after)) {
-            this.#game.onPointMove(this.#touchedPoint, before, after);
-            this.animate();
+            this.#game.onPointMove(touchedPoint, before, after);
+            this.animate("onMove", (ts) => {
+              this.warmNeighbors(touchedPoint, ts);
+            });
           }
         }
       }
@@ -1211,7 +1333,8 @@
         this.#canvas.style.width = `${pxWidth}px`;
         this.#canvas.style.height = `${pxHeight}px`;
         this.#game.onResize(newWidth, newHeight);
-        this.animate();
+        this.#edgeWidth = null;
+        this.animate("onResize");
       }
 
       /**
@@ -1225,10 +1348,14 @@
           const detangled = this.#game.isDetangled();
           const moveOnly = !detangled;
           this.pauseInput(moveOnly);
+          if (detangled) {
+            this.#coolingEdges.clear();
+            this.#coolingPoints.clear();
+          }
           const startFade = detangled ? ((fadeStarted) => {
             this.#fadeStarted = fadeStarted;
           }) : undefined;
-          this.animate(startFade);
+          this.animate("onUp", startFade);
         }
       }
 
@@ -1245,6 +1372,43 @@
           this.#canvas.removeEventListener("touchstart", this.#touchStartListener);
           this.#canvas.removeEventListener("touchend", this.#touchEndListener);
         }
+      }
+
+      warmEdge(edgeIndex, timestamp) {
+        this.#coolingEdges.set(edgeIndex, timestamp);
+      }
+
+      /**
+       * @param {number} pointIndex
+       * @param {number} timestamp
+       * @returns {void}
+       */
+      warmNeighbors(pointIndex, timestamp) {
+        if (this.#fadeStarted != null) return;
+        const edges = this.#game.edges;
+        for (let edgeIndex = 0; edgeIndex < edges.length; edgeIndex++) {
+          const edge = edges[edgeIndex];
+          let warmEdge = false;
+          if (edge.high === pointIndex) {
+            this.warmPoint(edge.low, timestamp);
+            warmEdge = true;
+          } else if (edge.low === pointIndex) {
+            this.warmPoint(edge.high, timestamp);
+            warmEdge = true;
+          }
+          if (warmEdge) {
+            this.warmEdge(edgeIndex, timestamp);
+          }
+        }
+        this.warmPoint(pointIndex, timestamp);
+      }
+
+      /**
+       * @param {number} pointIndex
+       * @param {number} timestamp
+       */
+      warmPoint(pointIndex, timestamp) {
+        this.#coolingPoints.set(pointIndex, timestamp);
       }
     }
 
