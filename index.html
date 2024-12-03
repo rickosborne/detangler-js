@@ -26,8 +26,11 @@
       text-indent: 0;
     }
 
-    html, body, #canvas {
+    html, body {
       background-color: black;
+    }
+
+    html, body, canvas {
       height: 100%;
       left: 0;
       overflow: hidden;
@@ -969,16 +972,16 @@
      * actually pretty easy to step through this way ... so :shrug:.
      */
     class DetanglerActor {
-      /** @type {HTMLCanvasElement} */
-      #canvas;
+      /** @type {[HTMLCanvasElement, HTMLCanvasElement, HTMLCanvasElement, HTMLCanvasElement]} */
+      #canvases;
       /** @type {Map<number,number>} */
       #coolingEdges;
       /** @type {Map<number,number>} */
       #coolingPoints;
       /** @type {function(MouseEvent):void} */
       #downListener;
-      /** @type {CanvasRenderingContext2D} */
-      #draw;
+      /** @type {[CanvasRenderingContext2D, CanvasRenderingContext2D, CanvasRenderingContext2D, CanvasRenderingContext2D]} */
+      #draws;
       /** @type {number} */
       #drawCount = 0;
       /** @type {number|null} */
@@ -991,6 +994,10 @@
       #gradients;
       /** @type {number} */
       #height;
+      /** @type {number[]} */
+      #lastStaticEdgeIndexes = [];
+      /** @type {number[]} */
+      #lastStaticPointIndexes = [];
       /** @type {function(MouseEvent):void} */
       #moveListener;
       /** @type {(function(number):void)[]} */
@@ -1022,25 +1029,25 @@
        * @param {number} pointCount
        * @param {number} sizeDivisor
        * @param {boolean} gradients
-       * @param {HTMLCanvasElement} canvas
+       * @param {[HTMLCanvasElement, HTMLCanvasElement, HTMLCanvasElement, HTMLCanvasElement]} canvases
        * @param {function():void} onDetangled
        */
-      constructor(pointCount, sizeDivisor, gradients, canvas, onDetangled) {
+      constructor(pointCount, sizeDivisor, gradients, canvases, onDetangled) {
         // Burn through some random numbers, so subsequent games don't always start the same.
         for (let i = 0; i < pointCount; i++) Rand.instance.int();
-        this.#canvas = canvas;
-        this.#width = canvas.width;
-        this.#height = canvas.height;
+        this.#canvases = canvases;
+        this.#width = canvases[0].width;
+        this.#height = canvases[0].height;
         this.#sizeDivisor = sizeDivisor;
         this.#edgeWidth = null;
         this.#gradients = gradients;
         this.#coolingEdges = new Map();
         this.#coolingPoints = new Map();
-        this.#game = new DetanglerGame(pointCount, canvas.width, canvas.height);
-        this.#draw = canvas.getContext("2d", {
-          alpha: false,
+        this.#game = new DetanglerGame(pointCount, this.#width, this.#height);
+        this.#draws = canvases.map((canvas, index) => canvas.getContext("2d", {
+          alpha: index > 0,
           antialias: true,
-        });
+        }));
         this.#onDetangled = onDetangled;
         this.#theme = Theme.random();
         const pixel = window.devicePixelRatio;
@@ -1067,21 +1074,22 @@
             event.preventDefault();
           }
         };
+        const topCanvas = canvases[canvases.length - 1];
         // Yes, this is a total hack and is probably horrible for accessibility.  Sigh.
         this.#touchEndListener = (event) => withOneTouch(event, (x, y) => this.onUp(x, y));
         this.#touchMoveListener = (event) => withOneTouch(event, (x, y) => this.onMove(x, y));
         this.#touchStartListener = (event) => withOneTouch(event, (x, y) => this.onDown(x, y));
-        canvas.addEventListener("mousedown", this.#downListener);
-        canvas.addEventListener("mouseup", this.#upListener);
-        canvas.addEventListener("touchstart", this.#touchStartListener);
-        canvas.addEventListener("touchend", this.#touchEndListener);
+        topCanvas.addEventListener("mousedown", this.#downListener);
+        topCanvas.addEventListener("mouseup", this.#upListener);
+        topCanvas.addEventListener("touchstart", this.#touchStartListener);
+        topCanvas.addEventListener("touchend", this.#touchEndListener);
         // To save battery on mobile devices, redraw only on demand,
         // not on a schedule.
         this.animate("constructor");
       }
 
       get edgeWidth() {
-        this.#edgeWidth ??= Math.round(Math.min(this.#canvas.clientWidth, this.#canvas.clientHeight) / this.#sizeDivisor);
+        this.#edgeWidth ??= Math.round(Math.min(this.#canvases[0].clientWidth, this.#canvases[0].clientHeight) / this.#sizeDivisor);
         return this.#edgeWidth;
       }
 
@@ -1128,10 +1136,13 @@
           this.#onAnimates = [];
         }
         this.#drawCount++;
-        const d = this.#draw;
-        d.fillStyle = "black";
-        d.fillRect(0, 0, this.#width, this.#height);
-        d.lineCap = "round";
+        const [dSE, dDE, dSN, dDN] = this.#draws;
+        /** @param {CanvasRenderingContext2D} d */
+        const clearDraw = (d) => {
+          d.clearRect(0, 0, this.#width, this.#height);
+        };
+        clearDraw(dDE);
+        clearDraw(dDN);
         const edges = this.#game.edges;
         const points = this.#game.points;
         const edgeWidth = this.edgeWidth;
@@ -1161,7 +1172,8 @@
           }
         }
         const twoPi = Math.PI * 2;
-        d.lineWidth = edgeWidth;
+        dSE.lineWidth = edgeWidth;
+        dDE.lineWidth = edgeWidth;
         /** @type {number[]} */
         const touchedIndexes = [];
         /** @type {number[]} */
@@ -1187,7 +1199,14 @@
           }
           idleIndexes.push(edgeIndex);
         }
-        for (const edgeList of [idleIndexes, coolingIndexes, touchedIndexes]) {
+        const idleSame = (idleIndexes.length === this.#lastStaticEdgeIndexes.length) && idleIndexes.every((v, n) => v === this.#lastStaticEdgeIndexes[n]);
+        const drawnEdgeList = [coolingIndexes, touchedIndexes];
+        if (!idleSame || this.#fadeStarted || (coolingIndexes.length === 0 && touchedIndexes.length === 0)) {
+          drawnEdgeList.unshift(idleIndexes);
+          clearDraw(dSE);
+        }
+        this.#lastStaticEdgeIndexes = idleIndexes;
+        for (const edgeList of drawnEdgeList) {
           for (const edgeIndex of edgeList) {
             const edge = edges[edgeIndex];
             const touched = edge.low === this.#touchedPoint || edge.high === this.#touchedPoint;
@@ -1199,13 +1218,10 @@
               const temp = this.#coolingEdges.get(edgeIndex);
               if (temp != null) {
                 const remainPercent = (coolTimeMs - (timestamp - temp)) / coolTimeMs;
-                if (remainPercent <= 0) {
-                  this.coolEdge(edgeIndex);
-                } else {
-                  color = color.combine(edgeTouched, remainPercent);
-                }
+                color = color.combine(edgeTouched, remainPercent);
               }
             }
+            const d = edgeList === idleIndexes ? dSE : dDE;
             d.beginPath();
             d.moveTo(p1.x, p1.y);
             d.lineTo(p2.x, p2.y);
@@ -1224,35 +1240,64 @@
             d.stroke();
           }
         }
-        d.strokeStyle = "none";
+        /** @type {number[]} */
+        const idlePoints = [];
+        /** @type {number[]} */
+        const dynamicPoints = [];
         for (let pointIndex = 0; pointIndex < points.length; pointIndex++) {
-          const point = points[pointIndex];
           const touched = pointIndex === this.#touchedPoint;
-          const baseColor = touched ? pointTouched : pointDefault;
-          let color = baseColor;
           const temp = this.#coolingPoints.get(pointIndex);
+          let dynamic = touched;
           if (temp != null) {
             const remainPercent = (coolTimeMs - (timestamp - temp)) / coolTimeMs;
             if (remainPercent <= 0) {
               this.coolPoint(pointIndex);
             } else {
-              color = baseColor.combine(pointTouched, remainPercent);
+              dynamic = true;
             }
           }
-          d.fillStyle = color.hex;
-          d.beginPath();
-          d.arc(point.x, point.y, pointRadius, 0, twoPi);
-          d.fill();
-          d.fillStyle = "black";
-          d.beginPath();
-          d.arc(point.x, point.y, edgeWidth, 0, twoPi);
-          d.fill();
+          if (dynamic) {
+            dynamicPoints.push(pointIndex);
+          } else {
+            idlePoints.push(pointIndex);
+          }
         }
-        if (this.#coolingPoints.size > 0 || this.#coolingEdges.size > 0) {
-          queueAnotherDraw = true;
+        const drawnPointsLists = [dynamicPoints];
+        const staticPointsSame = idlePoints.length === this.#lastStaticPointIndexes.length && idlePoints.every((i, n) => this.#lastStaticPointIndexes[n] === i);
+        if (!staticPointsSame || this.#fadeStarted || dynamicPoints.length === 0) {
+          clearDraw(dSN);
+          drawnPointsLists.unshift(idlePoints);
         }
-        if (queueAnotherDraw) {
-          this.animate("draw");
+        this.#lastStaticPointIndexes = idlePoints;
+        dDN.strokeStyle = "none";
+        dSN.strokeStyle = "none";
+        for (const pointsList of drawnPointsLists) {
+          for (const pointIndex of pointsList) {
+            const point = points[pointIndex];
+            const touched = pointIndex === this.#touchedPoint;
+            const baseColor = touched ? pointTouched : pointDefault;
+            let color = baseColor;
+            const temp = this.#coolingPoints.get(pointIndex);
+            if (temp != null) {
+              const remainPercent = (coolTimeMs - (timestamp - temp)) / coolTimeMs;
+              color = baseColor.combine(pointTouched, remainPercent);
+            }
+            const d = pointsList === idlePoints ? dSN : dDN;
+            d.fillStyle = color.hex;
+            d.beginPath();
+            d.arc(point.x, point.y, pointRadius, 0, twoPi);
+            d.fill();
+            d.fillStyle = "black";
+            d.beginPath();
+            d.arc(point.x, point.y, edgeWidth, 0, twoPi);
+            d.fill();
+          }
+          if (this.#coolingPoints.size > 0 || this.#coolingEdges.size > 0) {
+            queueAnotherDraw = true;
+          }
+          if (queueAnotherDraw) {
+            this.animate("draw");
+          }
         }
       }
 
@@ -1288,8 +1333,9 @@
         }
         if (closestIndex >= 0) {
           if (this.#touchedPoint < 0) {
-            this.#canvas.addEventListener("mousemove", this.#moveListener);
-            this.#canvas.addEventListener("touchmove", this.#touchMoveListener);
+            const topCanvas = this.#canvases[this.#canvases.length - 1];
+            topCanvas.addEventListener("mousemove", this.#moveListener);
+            topCanvas.addEventListener("touchmove", this.#touchMoveListener);
           }
           this.#touchedPoint = closestIndex;
           this.animate("onDown", (ts) => {
@@ -1326,12 +1372,14 @@
           return;
         }
         // console.log(`Resize: ${this.#width}x${this.#height} -> ${newWidth}x${newHeight}`);
-        this.#canvas.width = newWidth;
-        this.#canvas.height = newHeight;
+        this.#canvases.forEach((canvas) => {
+          canvas.width = newWidth;
+          canvas.height = newHeight;
+          canvas.style.width = `${pxWidth}px`;
+          canvas.style.height = `${pxHeight}px`;
+        });
         this.#width = newWidth;
         this.#height = newHeight;
-        this.#canvas.style.width = `${pxWidth}px`;
-        this.#canvas.style.height = `${pxHeight}px`;
         this.#game.onResize(newWidth, newHeight);
         this.#edgeWidth = null;
         this.animate("onResize");
@@ -1364,13 +1412,14 @@
        * @returns {void}
        */
       pauseInput(moveOnly = false) {
-        this.#canvas.removeEventListener("mousemove", this.#moveListener);
-        this.#canvas.removeEventListener("touchmove", this.#touchMoveListener);
+        const topCanvas = this.#canvases[this.#canvases.length - 1];
+        topCanvas.removeEventListener("mousemove", this.#moveListener);
+        topCanvas.removeEventListener("touchmove", this.#touchMoveListener);
         if (!moveOnly) {
-          this.#canvas.removeEventListener("mousedown", this.#downListener);
-          this.#canvas.removeEventListener("mouseup", this.#upListener);
-          this.#canvas.removeEventListener("touchstart", this.#touchStartListener);
-          this.#canvas.removeEventListener("touchend", this.#touchEndListener);
+          topCanvas.removeEventListener("mousedown", this.#downListener);
+          topCanvas.removeEventListener("mouseup", this.#upListener);
+          topCanvas.removeEventListener("touchstart", this.#touchStartListener);
+          topCanvas.removeEventListener("touchend", this.#touchEndListener);
         }
       }
 
@@ -1414,18 +1463,35 @@
 
     window.addEventListener("load", () => {
       let detanglerGame = null;
-      const canvas = document.getElementById("canvas");
+      /** @type {HTMLCanvasElement} */
+      const staticEdges = document.getElementById("static-edges");
+      /** @type {HTMLCanvasElement} */
+      const dynamicEdges = document.getElementById("dynamic-edges");
+      /** @type {HTMLCanvasElement} */
+      const staticNodes = document.getElementById("static-nodes");
+      /** @type {HTMLCanvasElement} */
+      const dynamicNodes = document.getElementById("dynamic-nodes");
       // This bit of silliness is just ... ugh.
       // https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API/Tutorial/Optimizing_canvas#scaling_for_high_resolution_displays
       // I'm sure someone, somewhere, thinks it makes perfect sense.
       // That person is a sociopath.
-      const bounds = canvas.getBoundingClientRect();
-      const pixels = window.devicePixelRatio ?? 1;
-      canvas.width = bounds.width * pixels;
-      canvas.height = bounds.height * pixels;
-      canvas.style.width = `${bounds.width}px`;
-      canvas.style.height = `${bounds.height}px`;
-      console.log(`Sizing: window=${window.innerWidth}x${window.innerHeight}, canvas-bounds:${bounds.width}x${bounds.height}, pixels=${pixels}, canvas-effective=${canvas.width}x${canvas.height}`);
+      /** @type {[HTMLCanvasElement, HTMLCanvasElement, HTMLCanvasElement, HTMLCanvasElement]} */
+      const canvases = [staticEdges, dynamicEdges, staticNodes, dynamicNodes];
+      /** @type {DOMRect} */
+      let bounds;
+      /** @type {number} */
+      let pixels, effectiveWidth, effectiveHeight;
+      canvases.forEach((canvas) => {
+        bounds = canvas.getBoundingClientRect();
+        pixels = window.devicePixelRatio ?? 1;
+        canvas.width = bounds.width * pixels;
+        canvas.height = bounds.height * pixels;
+        canvas.style.width = `${bounds.width}px`;
+        canvas.style.height = `${bounds.height}px`;
+        effectiveWidth = canvas.width;
+        effectiveHeight = canvas.height;
+      });
+      console.log(`Sizing: window=${window.innerWidth}x${window.innerHeight}, canvas-bounds:${bounds.width}x${bounds.height}, pixels=${pixels}, canvas-effective=${effectiveWidth}x${effectiveHeight}`);
       const paramsFromHash = () => {
         /**
          * Try to extract out state params from the URL hash.
@@ -1491,7 +1557,7 @@
         console.log(`Creating a tangle with ${pointCount} points.  Random seed: ${rngSeed}  GLHF.`);
         Rand.instance = new Rand(rngSeed);
         detanglerGame?.pauseInput(false);
-        detanglerGame = new DetanglerActor(pointCount, divisor, gradients, canvas, () => {
+        detanglerGame = new DetanglerActor(pointCount, divisor, gradients, canvases, () => {
           pointCount += 1;
           const nextHash = hashForState(pointCount, rngSeed, divisor, gradients);
           window.history.replaceState({}, "", nextHash);
@@ -1510,9 +1576,12 @@
 </head>
 <body>
 <noscript>This game requires JavaScript. Sorry. I promise, it doesn't do anything untoward.</noscript>
-<canvas id="canvas">
+<canvas id="static-edges">
   This game requires the browser's Canvas element and isn't particularly audio-description-friendly.
   Sorry about that.
 </canvas>
+<canvas id="dynamic-edges"></canvas>
+<canvas id="static-nodes"></canvas>
+<canvas id="dynamic-nodes"></canvas>
 </body>
 </html>
