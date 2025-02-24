@@ -28,6 +28,7 @@
 
     html, body {
       background-color: black;
+      overscroll-behavior-x: none;
     }
 
     html, body, canvas {
@@ -965,6 +966,106 @@
       }
     }
 
+    class TapTracker {
+      /** @type {{handler: () => void; minCount: number; withinMS: number}[]} */
+      #handlers = [];
+      /** @type {number[]} */
+      #tapTimes = [];
+      /** @type {number | undefined} */
+      #lastDown = undefined;
+
+      /**
+       * @param {number} minCount
+       * @param {number} withinMS
+       * @param {() => void} handler
+       */
+      onTaps(minCount, withinMS, handler) {
+        this.#handlers.push({ handler, minCount, withinMS })
+      }
+
+      /**
+       * @param {MouseEvent|TouchEvent} event
+       */
+      update(event) {
+        const now = Date.now();
+        if (event.type === "mousedown" || event.type === "touchstart") {
+          this.#lastDown = now;
+        } else if (event.type === "mouseup" || event.type === "touchend") {
+          if (this.#lastDown != null) {
+            const duration = now - this.#lastDown;
+            if (duration < 500) {
+              this.#tapTimes.push(now);
+              if (this.#tapTimes > 5) {
+                this.#tapTimes.splice(0, this.#tapTimes.length - 5);
+              }
+              const times = this.#tapTimes;
+              this.#handlers.filter((h) => times.filter((t) => (now - t) <= h.withinMS).length >= h.minCount)
+                .forEach((h) => h.handler());
+            }
+            this.#lastDown = undefined;
+          }
+        }
+      }
+    }
+
+    class GestureTracker {
+      #minDelta = Math.round(Math.min(window.innerWidth, window.innerHeight) * 0.1);
+      /** @type {{handler: () => void; maxDeg: number; minDeg: number; touchCount: number}[]} */
+      #handlers = [];
+      /** @type {Map<number,{x: number;y : number}[]>} */
+      #touchesById = new Map();
+
+      /**
+       * @param {number} touchCount
+       * @param {number} minDeg
+       * @param {number} maxDeg
+       * @param {() => void} handler
+       */
+      onSwipe(touchCount, minDeg, maxDeg, handler) {
+        this.#handlers.push({ handler, maxDeg, minDeg, touchCount })
+      }
+
+      update(/** @type {TouchEvent} */ event) {
+        // console.log("GestureTracker:update", event)
+        const current = Array.from(event.touches);
+        if (event.type === "touchend") {
+          this.#touchesById.clear();
+          return;
+        }
+        // Remove any old touches
+        Array.from(this.#touchesById.keys())
+          .filter((id) => current.find((c) => c.identifier === id) == null)
+          .forEach((id) => this.#touchesById.delete(id));
+        /** @type {number[]} */
+        const angles = [];
+        for (const touch of event.touches) {
+          let history = this.#touchesById.get(touch.identifier);
+          if (history == null) {
+            history = [];
+            this.#touchesById.set(touch.identifier, history);
+          }
+          history.push({ x: touch.clientX, y: touch.clientY });
+          if (history.length > 5) {
+            history.splice(0, history.length - 5);
+          }
+          if (history.length === 5) {
+            const dx = history[4].x - history[0].x;
+            const dy = history[4].y - history[0].y;
+            if (Math.abs(dx) < this.#minDelta && Math.abs(dy) < this.#minDelta) {
+              continue;
+            }
+            const rad = Math.atan2(dy, dx);
+            angles.push(rad * 180 / Math.PI);
+          }
+        }
+        if (angles.length > 1) {
+          this.#handlers
+            .filter((h) => h.touchCount === angles.length && angles.every((deg) => deg >= h.minDeg && deg <= h.maxDeg))
+            .forEach((h) => h.handler());
+        }
+      }
+    }
+
     /**
      * A model for both the drawing and interaction of the game.
      * This could likely be simplified a bit by extracting out some
@@ -990,6 +1091,7 @@
       #fadeStarted = null;
       /** @type {DetanglerGame} */
       #game;
+      #gestureTracker = new GestureTracker();
       /** @type {boolean} */
       #gradients;
       /** @type {number} */
@@ -1008,6 +1110,7 @@
       #sizeDivisor;
       /** @type {number} */
       #startTime = Date.now();
+      #tapTracker = new TapTracker();
       /** @type {Theme} */
       #theme;
       /** @type {function(TouchEvent):void} */
@@ -1062,6 +1165,8 @@
          * @param {function(number,number):void} callback
          */
         const withOneTouch = (event, callback) => {
+          this.#gestureTracker.update(event);
+          this.#tapTracker.update(event);
           /** @type {Touch|undefined} */
           let touch = undefined;
           if (event.changedTouches?.length === 1) {
@@ -1083,6 +1188,17 @@
         topCanvas.addEventListener("mouseup", this.#upListener);
         topCanvas.addEventListener("touchstart", this.#touchStartListener);
         topCanvas.addEventListener("touchend", this.#touchEndListener);
+        topCanvas.addEventListener("touchmove", (event) => this.#gestureTracker.update(event));
+        this.#gestureTracker.onSwipe(3, 80, 110, () => {
+          const [w, h] = this.getCanvasSize();
+          this.#game.onResize(w, Math.trunc(2 * h / 3));
+          this.animate("swipeUp");
+        });
+        this.#tapTracker.onTaps(3, 1_000, () => {
+          const [w, h] = this.getCanvasSize();
+          this.#game.onResize(w, Math.trunc(2 * h / 3));
+          this.animate("tripleTap");
+        });
         // To save battery on mobile devices, redraw only on demand,
         // not on a schedule.
         this.animate("constructor");
@@ -1570,6 +1686,15 @@
       });
       window.addEventListener("resize", () => {
         detanglerGame?.onResize();
+      });
+      window.addEventListener("popstate", (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+      });
+      window.addEventListener("beforeunload", (event) => {
+        event.preventDefault();
+        // noinspection JSDeprecatedSymbols
+        event.returnValue = true;
       });
     });
   </script>
